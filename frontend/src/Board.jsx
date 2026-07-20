@@ -369,6 +369,7 @@ export default function Board({
   }, [gameOver]);
 
   // ---- Save finished game to backend once ----
+  const [savedGameId, setSavedGameId] = useState(null);
   useEffect(() => {
     if (!gameOver || savedRef.current) return;
     savedRef.current = true;
@@ -405,9 +406,13 @@ export default function Board({
               ? user?.username
               : "Stockfish AI"
             : undefined,
-    }).catch(() => {
-      /* saving is best-effort; don't block the UI on failure */
-    });
+    })
+      .then((data) => {
+        if (data?.id) setSavedGameId(data.id);
+      })
+      .catch(() => {
+        /* saving is best-effort; don't block the UI on failure */
+      });
   }, [gameOver]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleSquareClick(row, col) {
@@ -692,6 +697,12 @@ export default function Board({
 
       {showReview && (
         <GameReview
+          gameId={savedGameId}
+          // Which color the logged-in human actually played — null for
+          // local pass-and-play, where both colors are the same person
+          // and "whose accuracy is this" isn't a meaningful question, so
+          // GameReview skips persisting analytics for that mode.
+          reviewerColor={mode === "online" ? myColor : mode === "ai" ? aiUserColor : null}
           fenHistory={fenHistory}
           sanMoves={moveHistory}
           uciMoves={uciHistory}

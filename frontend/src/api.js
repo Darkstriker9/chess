@@ -134,3 +134,61 @@ export async function analyzePositions(fens) {
   });
   return res.json();
 }
+
+// Checks whether this game's analysis is already cached (Neon/Postgres) —
+// lets GameReview skip straight to classification instead of re-running
+// Stockfish on every position again. Returns null on a cache miss or if
+// analytics storage isn't configured; never throws, since caching is a
+// nice-to-have, not required for Game Review to work.
+export async function fetchCachedAnalysis(gameId) {
+  if (!gameId) return null;
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/analyze-game/${gameId}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.cached ? data.results : null;
+  } catch {
+    return null;
+  }
+}
+
+// Caches the full, assembled results array once every chunk of a fresh
+// analysis has come back — a single write, so a partial chunk can never
+// clobber the cache with an incomplete game's worth of results. Best-effort
+// — GameReview has already shown the (correct) review by the time this
+// runs, so a failure here just means next time won't be cached either.
+export async function saveFullAnalysis(gameId, results) {
+  if (!gameId) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/analyze-game/${gameId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ results }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+// Persists the accuracy/category-counts GameReview.jsx just computed
+// client-side, so it can feed into the profile's move-quality analytics.
+// Best-effort — a failure here shouldn't interrupt looking at the review.
+export async function saveAnalysisSummary(gameId, { color, accuracy, counts }) {
+  if (!gameId) return;
+  try {
+    await fetch(`${BACKEND_URL}/api/analyze-game/${gameId}/summary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify({ color, accuracy, counts }),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function fetchMoveAnalytics() {
+  const res = await fetch(`${BACKEND_URL}/api/profile/analytics`, {
+    headers: await authHeaders(),
+  });
+  return res.json();
+}

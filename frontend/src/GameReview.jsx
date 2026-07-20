@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { analyzePositions } from "./api.js";
+import { analyzePositions, fetchCachedAnalysis, saveFullAnalysis, saveAnalysisSummary } from "./api.js";
 import { UNICODE_PIECES } from "./pieces/index.js";
 import Avatar from "./Avatar.jsx";
 
@@ -109,6 +109,8 @@ function MiniBoard({ fen, played, suggested }) {
 }
 
 export default function GameReview({
+  gameId,
+  reviewerColor,
   fenHistory,
   sanMoves,
   uciMoves,
@@ -124,12 +126,50 @@ export default function GameReview({
   const [cancelled, setCancelled] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(null);
   const [showMore, setShowMore] = useState(false);
+  const [fromCache, setFromCache] = useState(false);
+
+  function classifyAll(results) {
+    return sanMoves.map((san, i) => {
+      const before = toScore(results[i]);
+      const after = toScore(results[i + 1]);
+      const moverColor = i % 2 === 0 ? "white" : "black";
+      if (before == null || after == null) {
+        return { san, color: moverColor, category: null, loss: null };
+      }
+      const rawLoss = moverColor === "white" ? before - after : after - before;
+      const loss = Math.max(0, rawLoss);
+      const isBestMove = results[i]?.bestMove === uciMoves[i];
+      const beforeForMover = moverColor === "white" ? before : -before;
+      const afterForMover = moverColor === "white" ? after : -after;
+      const category = classify({
+        loss,
+        isBestMove,
+        isCapture: san.includes("x"),
+        beforeForMover,
+        afterForMover,
+      });
+      return { san, color: moverColor, category, loss, bestMove: results[i]?.bestMove || null };
+    });
+  }
 
   useEffect(() => {
     let stop = false;
     setCancelled(false);
 
     (async () => {
+      // A game already reviewed once has its analysis cached (Neon/
+      // Postgres, keyed by gameId) — skip straight to classification
+      // instead of burning through the free engine API's rate limit
+      // re-analyzing every position again.
+      const cached = await fetchCachedAnalysis(gameId);
+      if (stop) return;
+      if (cached) {
+        setFromCache(true);
+        setProgress(fenHistory.length);
+        setMoveResults(classifyAll(cached));
+        return;
+      }
+
       const results = [];
       for (let i = 0; i < fenHistory.length; i += CHUNK_SIZE) {
         if (stop) return;
@@ -149,29 +189,8 @@ export default function GameReview({
       }
       if (stop) return;
 
-      const classified = sanMoves.map((san, i) => {
-        const before = toScore(results[i]);
-        const after = toScore(results[i + 1]);
-        const moverColor = i % 2 === 0 ? "white" : "black";
-        if (before == null || after == null) {
-          return { san, color: moverColor, category: null, loss: null };
-        }
-        const rawLoss = moverColor === "white" ? before - after : after - before;
-        const loss = Math.max(0, rawLoss);
-        const isBestMove = results[i]?.bestMove === uciMoves[i];
-        const beforeForMover = moverColor === "white" ? before : -before;
-        const afterForMover = moverColor === "white" ? after : -after;
-        const category = classify({
-          loss,
-          isBestMove,
-          isCapture: san.includes("x"),
-          beforeForMover,
-          afterForMover,
-        });
-        return { san, color: moverColor, category, loss, bestMove: results[i]?.bestMove || null };
-      });
-
-      setMoveResults(classified);
+      setMoveResults(classifyAll(results));
+      saveFullAnalysis(gameId, results); // best-effort; caches for next time
     })();
 
     return () => {
@@ -179,6 +198,23 @@ export default function GameReview({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persists this account's accuracy + move-quality counts for the profile
+  // page's analytics once — guarded by `saved` so re-renders (e.g. moving
+  // the move stepper) don't fire it repeatedly. Skipped entirely for local
+  // pass-and-play games (reviewerColor is null there — see Board.jsx).
+  useEffect(() => {
+    if (!moveResults || !gameId || !reviewerColor) return;
+
+    const losses = moveResults.filter((m) => m.color === reviewerColor && m.loss != null).map((m) => m.loss);
+    const accuracy = accuracyFromLosses(losses);
+    const counts = {};
+    for (const m of moveResults) {
+      if (m.color === reviewerColor && m.category) counts[m.category] = (counts[m.category] || 0) + 1;
+    }
+    saveAnalysisSummary(gameId, { color: reviewerColor, accuracy, counts });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moveResults]);
 
   useEffect(() => {
     if (moveResults && selectedIndex == null && moveResults.length > 0) {
@@ -240,13 +276,18 @@ export default function GameReview({
 
         {!moveResults && !error && (
           <div className="review-progress">
-            <p>Analyzing position {progress} of {total}…</p>
+            <p>
+              {fromCache
+                ? "Loading your previous analysis…"
+                : `Analyzing position ${progress} of ${total}…`}
+            </p>
             <div className="review-progress-bar">
               <div className="review-progress-fill" style={{ width: `${(progress / total) * 100}%` }} />
             </div>
             <p className="review-note">
-              This runs the same free engine used for the AI opponent, one position at a time — long
-              games can take a little while.
+              {fromCache
+                ? "This game's already been analyzed once — reusing that instead of re-running the engine."
+                : "This runs the same free engine used for the AI opponent, one position at a time — long games can take a little while."}
             </p>
           </div>
         )}

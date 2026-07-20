@@ -10,6 +10,7 @@ import friendsRouter from "./routes/friends.js";
 import analyzeGameRouter from "./routes/analyzeGame.js";
 import { bumpUserStats } from "./stats.js";
 import { markOnline, markOffline, setUserRoom, getUserRoom, setIO, notifyUser } from "./presence.js";
+import { isConfigured as isDbConfigured } from "./db.js";
 
 const app = express();
 const server = http.createServer(app);
@@ -478,4 +479,9 @@ const PORT = process.env.PORT || 4000;
 server.listen(PORT, () => {
   console.log(`Chess backend running on http://localhost:${PORT}`);
   console.log("Build marker: photoURL-relay + analysis-cache + retry (2026-07)");
+  console.log(
+    isDbConfigured()
+      ? "Neon/Postgres analytics: connected"
+      : "Neon/Postgres analytics: not configured (DATABASE_URL unset) — Game Review will re-analyze every time instead of caching, and profile analytics will be empty."
+  );
 });

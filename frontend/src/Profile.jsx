@@ -5,6 +5,7 @@ import { socket } from "./socket.js";
 import {
   fetchProfile,
   fetchMyGames,
+  fetchMoveAnalytics,
   fetchFriends,
   searchUsers,
   sendFriendRequest,
@@ -34,6 +35,7 @@ const TIME_CONTROLS = [
 export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, onSpectate }) {
   const [tab, setTab] = useState("stats"); // 'stats' | 'friends'
   const [stats, setStats] = useState(null);
+  const [analytics, setAnalytics] = useState(null);
   const [games, setGames] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -141,13 +143,18 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
 
     (async () => {
       try {
-        const [profileData, gamesData] = await Promise.all([fetchProfile(), fetchMyGames()]);
+        const [profileData, gamesData, analyticsData] = await Promise.all([
+          fetchProfile(),
+          fetchMyGames(),
+          fetchMoveAnalytics().catch(() => null), // analytics is a bonus, not load-bearing
+        ]);
         if (cancelled) return;
         if (profileData.error) {
           setError(profileData.error);
         } else {
           setStats(profileData);
           setGames(gamesData.games || []);
+          setAnalytics(analyticsData);
         }
       } catch {
         if (!cancelled) setError("Could not reach the server.");
@@ -356,6 +363,56 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
                   <span className="stat-label">Losses</span>
                 </div>
               </div>
+
+              {analytics && analytics.gamesAnalyzed > 0 && (
+                <div className="analytics-panel">
+                  <h3>Move Accuracy</h3>
+                  <p className="analytics-sub">
+                    From {analytics.gamesAnalyzed} reviewed game{analytics.gamesAnalyzed === 1 ? "" : "s"}
+                  </p>
+
+                  <div className="analytics-summary">
+                    <div className="analytics-accuracy">
+                      <span className="analytics-accuracy-value">
+                        {analytics.averageAccuracy != null ? `${analytics.averageAccuracy.toFixed(1)}%` : "—"}
+                      </span>
+                      <span className="analytics-accuracy-label">Avg. accuracy</span>
+                    </div>
+
+                    {analytics.recentAccuracies.length > 1 && (
+                      <div className="analytics-trend" title="Accuracy over your most recently reviewed games">
+                        {analytics.recentAccuracies.map((v, i) => (
+                          <span
+                            key={i}
+                            className="analytics-trend-bar"
+                            style={{ height: `${Math.max(6, v)}%` }}
+                            title={`${v.toFixed(1)}%`}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="analytics-totals">
+                    <div className="analytics-total">
+                      <span className="analytics-total-value">{analytics.totals.blunder || 0}</span>
+                      <span className="analytics-total-label">Blunders</span>
+                    </div>
+                    <div className="analytics-total">
+                      <span className="analytics-total-value">{analytics.totals.mistake || 0}</span>
+                      <span className="analytics-total-label">Mistakes</span>
+                    </div>
+                    <div className="analytics-total">
+                      <span className="analytics-total-value">{analytics.totals.inaccuracy || 0}</span>
+                      <span className="analytics-total-label">Inaccuracies</span>
+                    </div>
+                    <div className="analytics-total">
+                      <span className="analytics-total-value">{analytics.totals.best || 0}</span>
+                      <span className="analytics-total-label">Best moves</span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {!loading && games.length === 0 && !error && (
                 <p className="profile-empty">No saved games yet — finish a game to see it here.</p>

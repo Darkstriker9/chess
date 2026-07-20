@@ -53,6 +53,28 @@ chess-game/
    paste the full downloaded JSON into `backend/.env` as `FIREBASE_SERVICE_ACCOUNT`
    (see below).
 
+## 0.5 Neon (Postgres) setup — optional, for analysis caching + move analytics
+
+Everything about accounts, saved games, and win/draw/loss stats lives in
+Firestore (step 0) — this part is unrelated to that and entirely optional.
+It only powers two things: **Game Review loading instantly on a game
+you've already reviewed** (instead of re-running Stockfish on every
+position again), and the **move-accuracy analytics panel** on the profile
+page (average accuracy, blunder/mistake counts, a trend across your recent
+reviewed games). Skip this section and the app works completely fine
+without it — those two things just won't be available.
+
+1. Create a free project at [neon.tech](https://neon.tech) (no credit card
+   needed for the free tier).
+2. On the project dashboard, click **Connect** and copy the connection
+   string — it looks like `postgres://user:password@host/dbname?sslmode=require`.
+3. Paste it into `backend/.env` as `DATABASE_URL` (see step 1 below).
+
+That's it — no migrations to run by hand. The two tables it needs
+(`game_analysis`, `game_analysis_summary`) are created automatically the
+first time the backend starts with `DATABASE_URL` set (see
+`backend/db.js` if you're curious what they look like).
+
 ## 1. Backend setup
 
 ```bash
@@ -62,12 +84,14 @@ cp .env.example .env
 ```
 
 Edit `.env`:
-- `FIREBASE_SERVICE_ACCOUNT` — the full service account JSON from step 0.5
+- `FIREBASE_SERVICE_ACCOUNT` — the full service account JSON from step 0
   above, as a single line.
 - The AI opponent uses [chess-api.com](https://chess-api.com) (free Stockfish
   18, no API key required) — nothing to configure there. If you switch to a
   provider that does need a key later, add it to `.env` and read it in
   `backend/routes/aiMove.js`.
+- `DATABASE_URL` — optional, from the Neon setup above. Leave unset to skip
+  analysis caching/analytics entirely.
 
 Then start the server:
 
@@ -125,9 +149,11 @@ On Render: **New → Web Service** → connect this repo →
 - **Start command:** `npm start`
 - **Environment variables:** copy everything from `backend/.env.example`
   with your real values — `FIREBASE_SERVICE_ACCOUNT` (the full JSON as one
-  line) and `CLIENT_ORIGIN` (your Vercel URL, see 3.3). Don't set `PORT` —
-  Render provides it automatically and `server.js` already reads
-  `process.env.PORT`.
+  line) and `CLIENT_ORIGIN` (your Vercel URL, see 3.3). Add `DATABASE_URL`
+  too if you set up Neon (step 0.5) — the analysis cache/analytics tables
+  are created automatically on first connection, no separate migration
+  step needed on Render. Don't set `PORT` — Render provides it
+  automatically and `server.js` already reads `process.env.PORT`.
 
 Once it's deployed you'll get a URL like `https://your-app.onrender.com` —
 that's your `VITE_BACKEND_URL` for the frontend.

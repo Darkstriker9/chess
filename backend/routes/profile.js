@@ -1,6 +1,7 @@
 import express from "express";
 import { firestore, firebaseAuth } from "../firebaseAdmin.js";
 import { requireAuth } from "../middleware/auth.js";
+import { getMoveAnalytics } from "../db.js";
 
 const router = express.Router();
 
@@ -26,6 +27,21 @@ router.get("/", requireAuth, async (req, res) => {
   } catch (err) {
     console.error("Fetch profile error:", err);
     return res.status(500).json({ error: "Could not fetch profile." });
+  }
+});
+
+// Move-quality analytics (accuracy trend, blunder/mistake/inaccuracy
+// totals) aggregated from Postgres/Neon — separate from the win/draw/loss
+// stats above, which stay in Firestore. Returns zeroed-out data (not an
+// error) if Neon isn't configured or this account hasn't reviewed any
+// games yet, since "no analytics" is a normal, expected state.
+router.get("/analytics", requireAuth, async (req, res) => {
+  try {
+    const analytics = await getMoveAnalytics(req.user.uid);
+    return res.json(analytics || { gamesAnalyzed: 0, averageAccuracy: null, totals: {}, recentAccuracies: [] });
+  } catch (err) {
+    console.error("Fetch move analytics error:", err.message);
+    return res.json({ gamesAnalyzed: 0, averageAccuracy: null, totals: {}, recentAccuracies: [] });
   }
 });
 
