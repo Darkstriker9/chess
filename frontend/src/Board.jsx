@@ -36,6 +36,7 @@ export default function Board({
   opponentUsername,
   opponentPhotoURL,
   onExitOnline,
+  matchId,
   aiUserColor = "white",
   aiDepth = 12,
   aiDifficultyLabel = "AI",
@@ -382,6 +383,7 @@ export default function Board({
 
     saveGame({
       roomId: roomId || "local",
+      matchId: mode === "online" ? matchId : null,
       pgn: moveHistory.join(" "),
       result,
       playerColor,
@@ -697,7 +699,13 @@ export default function Board({
 
       {showReview && (
         <GameReview
-          gameId={savedGameId}
+          // Online games use the shared matchId (both players' saves point
+          // at two different Firestore docs, but the same matchId) so both
+          // sides hit the exact same Neon cache row instead of two
+          // separately-analyzed copies of the same game. AI/local games
+          // only ever have one saved copy, so their own Firestore doc id
+          // (from saveGame's response) works fine as the cache key.
+          gameId={mode === "online" ? matchId : savedGameId}
           // Which color the logged-in human actually played — null for
           // local pass-and-play, where both colors are the same person
           // and "whose accuracy is this" isn't a meaningful question, so

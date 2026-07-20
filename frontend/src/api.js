@@ -7,11 +7,20 @@ async function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export async function saveGame({ roomId, pgn, result, whiteUsername, blackUsername, playerColor, countsForStats = true }) {
+export async function saveGame({
+  roomId,
+  matchId,
+  pgn,
+  result,
+  whiteUsername,
+  blackUsername,
+  playerColor,
+  countsForStats = true,
+}) {
   const res = await fetch(`${BACKEND_URL}/api/games`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await authHeaders()) },
-    body: JSON.stringify({ roomId, pgn, result, whiteUsername, blackUsername, playerColor, countsForStats }),
+    body: JSON.stringify({ roomId, matchId, pgn, result, whiteUsername, blackUsername, playerColor, countsForStats }),
   });
   return res.json();
 }

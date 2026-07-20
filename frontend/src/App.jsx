@@ -80,8 +80,8 @@ export default function App() {
   // ANY screen, not just the menu) needs to end up back here in App so it
   // can set onlineGame + navigate — the bell itself has no route awareness.
   useEffect(() => {
-    function onMatchFound({ roomId, color, opponentUsername, opponentPhotoURL, timeControl }) {
-      setOnlineGame({ roomId, color, opponentUsername, opponentPhotoURL, timeControl });
+    function onMatchFound({ roomId, color, opponentUsername, opponentPhotoURL, timeControl, matchId }) {
+      setOnlineGame({ roomId, color, opponentUsername, opponentPhotoURL, timeControl, matchId });
       navigate(`/online/${roomId}`);
     }
     socket.on("match_found", onMatchFound);
@@ -225,8 +225,8 @@ export default function App() {
           <Lobby
             user={user}
             onBack={backToMenu}
-            onMatched={({ roomId, color, opponentUsername, opponentPhotoURL, timeControl }) => {
-              setOnlineGame({ roomId, color, opponentUsername, opponentPhotoURL, timeControl });
+            onMatched={({ roomId, color, opponentUsername, opponentPhotoURL, timeControl, matchId }) => {
+              setOnlineGame({ roomId, color, opponentUsername, opponentPhotoURL, timeControl, matchId });
               navigate(`/online/${roomId}`);
             }}
           />
@@ -270,6 +270,7 @@ function OnlineGameRoute({ onlineGame, pieceTheme, user, onExit }) {
         opponentUsername={onlineGame.opponentUsername}
         opponentPhotoURL={onlineGame.opponentPhotoURL}
         initialSeconds={onlineGame.timeControl}
+        matchId={onlineGame.matchId}
         pieceTheme={pieceTheme}
         user={user}
         onExitOnline={onExit}

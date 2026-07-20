@@ -11,6 +11,7 @@ import analyzeGameRouter from "./routes/analyzeGame.js";
 import { bumpUserStats } from "./stats.js";
 import { markOnline, markOffline, setUserRoom, getUserRoom, setIO, notifyUser } from "./presence.js";
 import { isConfigured as isDbConfigured } from "./db.js";
+import { randomUUID } from "node:crypto";
 
 const app = express();
 const server = http.createServer(app);
@@ -182,6 +183,7 @@ io.on("connection", (socket) => {
         opponentUsername: host.username,
         opponentPhotoURL: host.photoURL || null,
         timeControl: openRoom.timeControlSeconds,
+        matchId: openRoom.matchId,
       });
       io.to(host.socketId).emit("match_found", {
         roomId,
@@ -189,6 +191,7 @@ io.on("connection", (socket) => {
         opponentUsername: username || "Guest",
         opponentPhotoURL: photoURL || null,
         timeControl: openRoom.timeControlSeconds,
+        matchId: openRoom.matchId,
       });
       return;
     }
@@ -203,6 +206,14 @@ io.on("connection", (socket) => {
       spectatorSocketIds: new Set(),
       fen: null,
       timeControlSeconds: wantedTimeControl,
+      // A permanent, never-reused id for this specific match — unlike the
+      // short roomId code, which gets recycled once a room is cleaned up.
+      // Both players save their own copy of a finished game as separate
+      // Firestore documents (so each shows up in their own "my games"
+      // list), but they share this one matchId, which is what the Neon
+      // analysis cache is actually keyed on — otherwise the two players'
+      // saves would get two different cache entries for the same game.
+      matchId: randomUUID(),
     });
     socket.join(roomId);
     setUserRoom(uid, roomId);
@@ -232,6 +243,7 @@ io.on("connection", (socket) => {
       spectatorSocketIds: new Set(),
       fen: null,
       timeControlSeconds: normalizeTimeControl(timeControl),
+      matchId: randomUUID(), // see quick_match above for why this exists
     });
     socket.join(roomId);
     setUserRoom(uid, roomId);
@@ -273,6 +285,7 @@ io.on("connection", (socket) => {
       opponentUsername: host.username,
       opponentPhotoURL: host.photoURL || null,
       timeControl: room.timeControlSeconds,
+      matchId: room.matchId,
     });
     io.to(host.socketId).emit("match_found", {
       roomId: code,
@@ -280,6 +293,7 @@ io.on("connection", (socket) => {
       opponentUsername: username || "Guest",
       opponentPhotoURL: photoURL || null,
       timeControl: room.timeControlSeconds,
+      matchId: room.matchId,
     });
   });
 
@@ -353,6 +367,7 @@ io.on("connection", (socket) => {
       spectatorSocketIds: new Set(),
       fen: null,
       timeControlSeconds: normalizeTimeControl(timeControl),
+      matchId: randomUUID(), // see quick_match above for why this exists
     });
     socket.join(roomId);
     setUserRoom(uid, roomId);
@@ -400,6 +415,7 @@ io.on("connection", (socket) => {
       opponentUsername: host.username,
       opponentPhotoURL: host.photoURL || null,
       timeControl: room.timeControlSeconds,
+      matchId: room.matchId,
     });
     io.to(host.socketId).emit("match_found", {
       roomId,
@@ -407,6 +423,7 @@ io.on("connection", (socket) => {
       opponentUsername: username || "Guest",
       opponentPhotoURL: photoURL || null,
       timeControl: room.timeControlSeconds,
+      matchId: room.matchId,
     });
   });
 

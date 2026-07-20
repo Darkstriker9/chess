@@ -19,11 +19,18 @@ function requireFirestore(res) {
 // won't be able to look the game up under an account later.
 router.post("/", optionalAuth, async (req, res) => {
   if (!requireFirestore(res)) return;
-  const { roomId, pgn, result, whiteUsername, blackUsername, playerColor, countsForStats = true } = req.body;
+  const { roomId, matchId, pgn, result, whiteUsername, blackUsername, playerColor, countsForStats = true } = req.body;
 
   try {
     const docRef = await firestore.collection("games").add({
       roomId: roomId || null,
+      // The two players in an online game each save their own copy as a
+      // separate document (so each has its own entry in "my games"), but
+      // both copies carry the same matchId — that's what actually links
+      // them as "the same real match" for anything that needs to treat
+      // them as one (e.g. the Neon analysis cache, keyed on matchId
+      // directly by the client rather than looked up through here).
+      matchId: matchId || null,
       whiteUsername: whiteUsername || null,
       blackUsername: blackUsername || null,
       pgn: pgn || "",

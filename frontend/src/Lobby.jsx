@@ -35,9 +35,9 @@ export default function Lobby({ user, onMatched, onBack }) {
       setView("hosting");
     });
 
-    socket.on("match_found", ({ roomId, color, opponentUsername, opponentPhotoURL, timeControl: matchedTimeControl }) => {
+    socket.on("match_found", ({ roomId, color, opponentUsername, opponentPhotoURL, timeControl: matchedTimeControl, matchId }) => {
       activeRoomRef.current = null;
-      onMatched({ roomId, color, opponentUsername, opponentPhotoURL, timeControl: matchedTimeControl });
+      onMatched({ roomId, color, opponentUsername, opponentPhotoURL, timeControl: matchedTimeControl, matchId });
     });
 
     socket.on("room_not_found", () => setError("No room found with that code."));
