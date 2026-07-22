@@ -3,6 +3,7 @@ import { createInitialBoard, UNICODE_PIECES } from "./pieces/index.js";
 import {
   getLegalMoves,
   getAllLegalMoves,
+  getMovesForPiece,
   applyMoveToBoard,
   isKingInCheck,
   hasInsufficientMaterial,
@@ -12,7 +13,7 @@ import {
 } from "./chessEngine.js";
 import { socket } from "./socket.js";
 import { getAIMove, saveGame } from "./api.js";
-import { playMove, playCapture, playCheck, playGameEnd } from "./sound.js";
+import { playMove, playCapture, playCheck, playGameEnd, playIllegal } from "./sound.js";
 import PromotionModal from "./PromotionModal.jsx";
 import MoveHistory from "./MoveHistory.jsx";
 import Clock from "./Clock.jsx";
@@ -47,6 +48,16 @@ export default function Board({
   const [turn, setTurn] = useState("white");
   const [selected, setSelected] = useState(null);
   const [legalMoves, setLegalMoves] = useState([]);
+  // Premoving: queuing a move during the opponent's turn so it fires the
+  // instant it becomes yours. Deliberately separate state from
+  // selected/legalMoves above — those represent an actual, fully-legal
+  // move on your own turn; premoveSelected/premove represent a move that
+  // LOOKS like it should work based on the piece's movement pattern, but
+  // hasn't been checked against a position that doesn't exist yet (the
+  // opponent hasn't moved). See handlePremoveClick and the "try to fire a
+  // queued premove" effect further down for how the two meanings differ.
+  const [premoveSelected, setPremoveSelected] = useState(null);
+  const [premove, setPremove] = useState(null); // { from, to, moveInfo } | null
   const [enPassantTarget, setEnPassantTarget] = useState(null);
   const [castleRights, setCastleRights] = useState(initialCastleRights());
   const [myColor, setMyColor] = useState(assignedColor || "white");
@@ -419,8 +430,12 @@ export default function Board({
 
   function handleSquareClick(row, col) {
     if (gameOver || pendingPromotion) return;
-    if (mode === "online" && turn !== myColor) return;
-    if (mode === "ai" && turn !== aiUserColor) return;
+
+    const notMyTurn = (mode === "online" && turn !== myColor) || (mode === "ai" && turn !== aiUserColor);
+    if (notMyTurn) {
+      if (myPlayingColor) handlePremoveClick(row, col);
+      return;
+    }
 
     const piece = board[row][col];
 
@@ -457,6 +472,108 @@ export default function Board({
     setLegalMoves(moves);
   }
 
+  // Premoves are checked against the piece's raw movement pattern only
+  // (getMovesForPiece, not getLegalMoves) — whether the resulting
+  // position leaves your king in check can't be known yet, since the
+  // opponent's move that determines that position hasn't happened. The
+  // queued move gets the real, full legality check later, once it's
+  // actually your turn (see the effect below).
+  function premoveTargetsFor(row, col, piece) {
+    return getMovesForPiece(board, row, col, piece, {
+      enPassantTarget,
+      castleRights: castleRights[piece.color],
+    });
+  }
+
+  function cancelPremove() {
+    setPremove(null);
+    setPremoveSelected(null);
+  }
+
+  function handlePremoveClick(row, col) {
+    const piece = board[row][col];
+
+    // Clicking either square of an already-queued premove cancels it —
+    // there's no drag gesture here to distinguish "reposition" from
+    // "cancel," so a second click on the move you just queued is the
+    // simplest discoverable way to undo it.
+    if (premove && ((premove.from.row === row && premove.from.col === col) || (premove.to.row === row && premove.to.col === col))) {
+      cancelPremove();
+      return;
+    }
+
+    if (premoveSelected) {
+      if (premoveSelected.row === row && premoveSelected.col === col) {
+        setPremoveSelected(null); // clicked the same square again — deselect
+        return;
+      }
+      const fromPiece = board[premoveSelected.row][premoveSelected.col];
+      const targets = premoveTargetsFor(premoveSelected.row, premoveSelected.col, fromPiece);
+      const move = targets.find((m) => m.row === row && m.col === col);
+      if (move) {
+        setPremove({ from: premoveSelected, to: { row, col }, moveInfo: move });
+        setPremoveSelected(null);
+        return;
+      }
+      if (piece && piece.color === myPlayingColor) {
+        setPremoveSelected({ row, col }); // switch selection to this piece instead
+      } else {
+        setPremoveSelected(null);
+      }
+      return;
+    }
+
+    if (piece && piece.color === myPlayingColor) {
+      setPremoveSelected({ row, col });
+    }
+  }
+
+  // The moment it actually becomes your turn, try to fire whatever
+  // premove is queued — checked for real this time (getLegalMoves, full
+  // check-safety included) against the position the opponent's move just
+  // created. If the opponent did anything that invalidates it (captured
+  // the piece, blocked the path, pinned your king, etc.), it's silently
+  // dropped rather than shown as an error — that's the normal, expected
+  // outcome of premoving on the wrong guess, not a bug to surface.
+  useEffect(() => {
+    if (!premove || gameOver) return;
+    if (!(myPlayingColor && turn === myPlayingColor)) return;
+
+    const piece = board[premove.from.row][premove.from.col];
+    const stillValid =
+      piece &&
+      piece.color === myPlayingColor &&
+      getLegalMoves(board, premove.from.row, premove.from.col, piece, {
+        enPassantTarget,
+        castleRights: castleRights[piece.color],
+      }).some((m) => m.row === premove.to.row && m.col === premove.to.col);
+
+    setPremove(null);
+
+    if (stillValid) {
+      const move = getLegalMoves(board, premove.from.row, premove.from.col, piece, {
+        enPassantTarget,
+        castleRights: castleRights[piece.color],
+      }).find((m) => m.row === premove.to.row && m.col === premove.to.col);
+      // Premoved promotions always queen — asking which piece ahead of
+      // time would need its own modal for a case that's rare in practice
+      // (underpromotion off a premove) and queening is correct the
+      // overwhelming majority of the time.
+      commitMove(premove.from, premove.to, move, "q");
+    } else {
+      playIllegal();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turn]);
+
+  // A queued premove that never got the chance to fire (the game ended
+  // first) shouldn't linger highlighted on a board nobody can interact
+  // with anymore.
+  useEffect(() => {
+    if (gameOver) cancelPremove();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gameOver]);
+
   function handlePromotionChoice(type) {
     const { from, to, moveInfo } = pendingPromotion;
     setPendingPromotion(null);
@@ -465,6 +582,10 @@ export default function Board({
 
   const isLight = (row, col) => (row + col) % 2 === 0;
   const isLegalTarget = (row, col) => legalMoves.some((m) => m.row === row && m.col === col);
+  const premoveTargetSquares = premoveSelected
+    ? premoveTargetsFor(premoveSelected.row, premoveSelected.col, board[premoveSelected.row][premoveSelected.col])
+    : [];
+  const isPremoveTarget = (row, col) => premoveTargetSquares.some((m) => m.row === row && m.col === col);
   const inCheckNow = isKingInCheck(board, turn);
 
   function findKingSquare(color) {
@@ -571,6 +692,9 @@ export default function Board({
               colOrder.map((col) => {
                 const piece = board[row][col];
                 const isCapture = isLegalTarget(row, col) && piece;
+                const isPremoveCapture = isPremoveTarget(row, col) && piece;
+                const isPremoveFrom = premove?.from.row === row && premove?.from.col === col;
+                const isPremoveTo = premove?.to.row === row && premove?.to.col === col;
                 return (
                   <div
                     key={`${row}-${col}`}
@@ -580,8 +704,18 @@ export default function Board({
                       selected?.row === row && selected?.col === col ? "selected" : "",
                       isLegalTarget(row, col) ? (isCapture ? "capture-target" : "legal-target") : "",
                       checkedKingSquare?.r === row && checkedKingSquare?.c === col ? "king-in-check" : "",
+                      premoveSelected?.row === row && premoveSelected?.col === col ? "premove-selected" : "",
+                      isPremoveTarget(row, col) ? (isPremoveCapture ? "premove-capture-target" : "premove-target") : "",
+                      isPremoveFrom || isPremoveTo ? "premove-queued" : "",
                     ].join(" ")}
                     onClick={() => handleSquareClick(row, col)}
+                    onContextMenu={(e) => {
+                      // Right-click to cancel is the convention players
+                      // already expect from other chess sites — cheap to
+                      // support alongside the click-the-queued-move way.
+                      e.preventDefault();
+                      if (premove || premoveSelected) cancelPremove();
+                    }}
                   >
                     {piece && (
                       <span className={`piece ${piece.color}`}>
@@ -593,6 +727,12 @@ export default function Board({
               })
             )}
           </div>
+
+          {premove && (
+            <button className="premove-badge" onClick={cancelPremove} title="Click to cancel">
+              ⏩ Premove queued — click to cancel
+            </button>
+          )}
 
           <div className="file-coords">
             {displayFiles.split("").map((f) => (

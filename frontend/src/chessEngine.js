@@ -5,6 +5,16 @@
 
 import { getMovesForPiece } from "./pieces/index.js";
 
+// Re-exported as-is: this gives every pattern a piece could move in on the
+// current board, WITHOUT filtering out moves that would leave your own
+// king in check. getLegalMoves() below does that filtering — appropriate
+// for an actual move on your turn, but wrong for a premove, where the
+// board your move will actually land on doesn't exist yet (the opponent
+// hasn't moved). A premove can only be checked against "does this piece
+// move this way," not "is my king safe afterward," since that depends on
+// a future position nobody can see yet.
+export { getMovesForPiece };
+
 export function cloneBoard(board) {
   return board.map((row) => row.map((sq) => (sq ? { ...sq } : null)));
 }

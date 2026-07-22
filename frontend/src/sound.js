@@ -65,6 +65,15 @@ export function playCheck() {
   tone(660, 0.16, { type: "sawtooth", gain: 0.1, delay: 0.1 });
 }
 
+/** A queued premove that turned out illegal once it was actually your
+ * turn (the opponent's move blocked it, captured the piece, left your
+ * king in check, etc.) — a short, low buzz distinct from every other
+ * sound here, so it reads as "that didn't happen" rather than a move. */
+export function playIllegal() {
+  if (!isSoundEnabled()) return;
+  tone(160, 0.14, { type: "square", gain: 0.11 });
+}
+
 /** outcome: 'win' | 'loss' | 'draw' | 'neutral' */
 export function playGameEnd(outcome) {
   if (!isSoundEnabled()) return;

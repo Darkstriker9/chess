@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { updateProfile } from "firebase/auth";
-import { auth } from "./firebase.js";
+import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { auth, storage } from "./firebase.js";
+import { resizeImageFile } from "./imageUtils.js";
 import { socket } from "./socket.js";
 import {
   fetchProfile,
@@ -47,6 +49,7 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
   const [avatarError, setAvatarError] = useState("");
   const [avatarUrlInput, setAvatarUrlInput] = useState("");
   const [editingAvatarUrl, setEditingAvatarUrl] = useState(false);
+  const fileInputRef = useRef(null);
   // Firebase Auth's `photoURL` is never synced to the backend/Firestore, so
   // reading it from the fetched `stats` object (like the rest of the
   // profile) would go stale on every reload — track it straight from the
@@ -179,6 +182,51 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
     }
   }
 
+  const MAX_AVATAR_SOURCE_BYTES = 15 * 1024 * 1024; // generous — resized down before upload anyway
+
+  async function handleAvatarFileChange(e) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // reset so picking the same file again still fires onChange
+    if (!file || !auth.currentUser) return;
+
+    if (!file.type.startsWith("image/")) {
+      setAvatarError("Please choose an image file.");
+      return;
+    }
+    if (file.size > MAX_AVATAR_SOURCE_BYTES) {
+      setAvatarError("That image is too large — please choose one under 15MB.");
+      return;
+    }
+
+    setAvatarError("");
+    setAvatarSaving(true);
+    try {
+      const resized = await resizeImageFile(file);
+      // Same fixed path every time (not versioned per-upload) — a
+      // re-upload just overwrites the last one, so there's never more
+      // than one file per account sitting in Storage.
+      const avatarRef = ref(storage, `avatars/${auth.currentUser.uid}`);
+      await uploadBytes(avatarRef, resized, { contentType: "image/jpeg" });
+      const url = await getDownloadURL(avatarRef);
+      await updateProfile(auth.currentUser, { photoURL: url });
+      setPhotoURL(url);
+      onProfileUpdated?.({ photoURL: url });
+    } catch (err) {
+      console.error("Avatar upload failed:", err);
+      // Storage requires the Blaze plan to enable at all (see README) —
+      // if it isn't set up yet, every upload fails with a storage/* error
+      // code rather than silently succeeding. Surface something
+      // actionable instead of a raw Firebase error.
+      if (err?.code?.startsWith("storage/")) {
+        setAvatarError("Photo uploads aren't set up for this project yet — see the README's Firebase Storage section.");
+      } else {
+        setAvatarError(err.message || "Couldn't upload that photo — please try again.");
+      }
+    } finally {
+      setAvatarSaving(false);
+    }
+  }
+
   async function handleAvatarUrlSave() {
     const url = avatarUrlInput.trim();
     if (!auth.currentUser) return;
@@ -216,6 +264,11 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
       await updateProfile(auth.currentUser, { photoURL: "" });
       setPhotoURL(null);
       onProfileUpdated?.({ photoURL: null });
+      // Best-effort cleanup — a no-op if the current photo was actually
+      // an external URL (nothing exists at this Storage path in that
+      // case) or if Storage isn't configured at all. Either way, not
+      // worth surfacing as an error to the user.
+      deleteObject(ref(storage, `avatars/${auth.currentUser.uid}`)).catch(() => {});
     } catch (err) {
       console.error("Avatar removal failed:", err);
       setAvatarError("Couldn't remove the photo — please try again.");
@@ -278,8 +331,19 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
       <div className="profile-avatar-block">
         <Avatar username={stats?.username} photoURL={photoURL} size={72} />
 
+        <input
+          type="file"
+          accept="image/*"
+          ref={fileInputRef}
+          onChange={handleAvatarFileChange}
+          style={{ display: "none" }}
+        />
+
         {!editingAvatarUrl ? (
           <div className="profile-avatar-actions">
+            <button className="link-btn" onClick={() => fileInputRef.current?.click()} disabled={avatarSaving}>
+              {avatarSaving ? "Uploading…" : photoURL ? "Change photo" : "Upload photo"}
+            </button>
             <button
               className="link-btn"
               onClick={() => {
@@ -287,8 +351,9 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
                 setEditingAvatarUrl(true);
                 setAvatarError("");
               }}
+              disabled={avatarSaving}
             >
-              {photoURL ? "Change photo" : "Set photo from URL"}
+              Use image URL
             </button>
             {photoURL && (
               <button className="link-btn" onClick={handleAvatarRemove} disabled={avatarSaving}>
