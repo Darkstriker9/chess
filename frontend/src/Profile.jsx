@@ -183,6 +183,7 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
   }
 
   const MAX_AVATAR_SOURCE_BYTES = 15 * 1024 * 1024; // generous — resized down before upload anyway
+  const MAX_GIF_BYTES = 5 * 1024 * 1024; // GIFs upload as-is (no client-side resize), so a tighter cap
 
   async function handleAvatarFileChange(e) {
     const file = e.target.files?.[0];
@@ -193,7 +194,17 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
       setAvatarError("Please choose an image file.");
       return;
     }
-    if (file.size > MAX_AVATAR_SOURCE_BYTES) {
+
+    // Resizing (below) flattens an animated GIF to a single static JPEG
+    // frame, silently losing the animation — so GIFs skip that step
+    // entirely and upload as-is instead. That means no client-side
+    // compression for them, hence the tighter size cap.
+    const isGif = file.type === "image/gif";
+    if (isGif && file.size > MAX_GIF_BYTES) {
+      setAvatarError("That GIF is too large — please choose one under 5MB.");
+      return;
+    }
+    if (!isGif && file.size > MAX_AVATAR_SOURCE_BYTES) {
       setAvatarError("That image is too large — please choose one under 15MB.");
       return;
     }
@@ -201,12 +212,12 @@ export default function Profile({ onBack, onAccountDeleted, onProfileUpdated, on
     setAvatarError("");
     setAvatarSaving(true);
     try {
-      const resized = await resizeImageFile(file);
+      const uploadData = isGif ? file : await resizeImageFile(file);
       // Same fixed path every time (not versioned per-upload) — a
       // re-upload just overwrites the last one, so there's never more
       // than one file per account sitting in Storage.
       const avatarRef = ref(storage, `avatars/${auth.currentUser.uid}`);
-      await uploadBytes(avatarRef, resized, { contentType: "image/jpeg" });
+      await uploadBytes(avatarRef, uploadData, { contentType: isGif ? "image/gif" : "image/jpeg" });
       const url = await getDownloadURL(avatarRef);
       await updateProfile(auth.currentUser, { photoURL: url });
       setPhotoURL(url);
