@@ -1,5 +1,5 @@
 import express from "express";
-import { firestore, firebaseAuth } from "../firebaseAdmin.js";
+import { firestore, firebaseAuth, admin } from "../firebaseAdmin.js";
 import { requireAuth } from "../middleware/auth.js";
 import { getMoveAnalytics } from "../db.js";
 
@@ -160,10 +160,15 @@ router.post("/claim-username", requireAuth, async (req, res) => {
 
 // Deletes the account entirely: the Firestore profile doc (stats,
 // friends) AND the underlying Firebase Auth account, so nothing is left
-// behind to log back into. Note: this does NOT scrub this uid out of
-// other users' friends lists (that would require scanning every user's
-// doc) — a deleted friend may still show their old username in someone
-// else's friends list. Saved games in the "games" collection are also
+// behind to log back into. Before that, it also scrubs this uid out of
+// every OTHER user's friends list and pending requests — friend data is
+// stored as arrays of {uid, username} snapshots on each user's own doc
+// (not a queryable reverse index pointing back at this uid), so the only
+// reliable way to find every reference is to scan all accounts. That's
+// completely fine at this app's scale (a friends-based hobby project,
+// not a service with millions of users) — without it, a deleted account
+// would linger forever as a permanently-offline "ghost" friend for
+// anyone who'd added them. Saved games in the "games" collection are
 // left as-is (they're historical records, not tied to a live account).
 router.delete("/", requireAuth, async (req, res) => {
   if (!firestore || !firebaseAuth) {
@@ -172,15 +177,46 @@ router.delete("/", requireAuth, async (req, res) => {
     });
   }
 
+  const uid = req.user.uid;
+
   try {
-    const userRef = firestore.collection("users").doc(req.user.uid);
+    // Scrub references first — if this failed partway through after the
+    // account was already gone, we'd have no uid left to search for.
+    const allUsersSnap = await firestore.collection("users").get();
+    const toUpdate = [];
+    for (const otherDoc of allUsersSnap.docs) {
+      if (otherDoc.id === uid) continue;
+      const data = otherDoc.data();
+      const updates = {};
+      for (const field of ["friends", "friendRequestsIncoming", "friendRequestsOutgoing"]) {
+        // arrayRemove needs the exact stored object, not a reconstructed
+        // one — their snapshot of my username may be stale if I've since
+        // renamed, so pull the literal entry out of their own array.
+        const entry = (data[field] || []).find((f) => f.uid === uid);
+        if (entry) updates[field] = admin.firestore.FieldValue.arrayRemove(entry);
+      }
+      if (Object.keys(updates).length > 0) toUpdate.push({ ref: otherDoc.ref, updates });
+    }
+
+    // Batched in chunks of 400 (Firestore's limit is 500 writes/batch) —
+    // harmless overhead at this app's scale, cheap insurance if it ever
+    // has more than a couple hundred accounts.
+    for (let i = 0; i < toUpdate.length; i += 400) {
+      const batch = firestore.batch();
+      for (const { ref, updates } of toUpdate.slice(i, i + 400)) {
+        batch.set(ref, updates, { merge: true });
+      }
+      await batch.commit();
+    }
+
+    const userRef = firestore.collection("users").doc(uid);
     const doc = await userRef.get();
     const usernameLower = doc.exists ? doc.data().usernameLower : null;
     if (usernameLower) {
       await firestore.collection("usernames").doc(usernameLower).delete();
     }
     await userRef.delete();
-    await firebaseAuth.deleteUser(req.user.uid);
+    await firebaseAuth.deleteUser(uid);
     return res.json({ ok: true });
   } catch (err) {
     console.error("Delete account error:", err);
